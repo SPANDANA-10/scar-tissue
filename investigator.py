@@ -115,25 +115,65 @@ to the current incident.
     client = Groq(api_key=api_key)
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                },
+        messages = [
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": user_prompt
+            }
+        ]
+        report_parts = []
+        max_continuations = 2
+
+        for continuation_count in range(max_continuations + 1):
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.2,
+                max_completion_tokens=5000,
+                reasoning_effort="low",
+                include_reasoning=False
+            )
+
+            choice = response.choices[0]
+            content = choice.message.content or ""
+            if content:
+                report_parts.append(content)
+
+            finish_reason = (choice.finish_reason or "").lower()
+            if finish_reason == "stop":
+                break
+
+            if finish_reason != "length":
+                raise RuntimeError(
+                    "Groq returned an investigation report with an "
+                    "incomplete or unexpected finish reason: "
+                    f"{finish_reason or 'missing'!r}."
+                )
+
+            if continuation_count == max_continuations:
+                raise RuntimeError(
+                    "Groq investigation report is incomplete after "
+                    f"{max_continuations} continuation attempts."
+                )
+
+            messages.extend([
+                {"role": "assistant", "content": content},
                 {
                     "role": "user",
-                    "content": user_prompt
+                    "content": (
+                        "Continue the investigation report from exactly where "
+                        "it stopped. Do not repeat prior text or restart the "
+                        "report; finish any incomplete section and include "
+                        "all remaining required sections."
+                    )
                 }
-            ],
-            temperature=0.2,
-            max_completion_tokens=5000,
-            reasoning_effort="low",
-            include_reasoning=False
-        )
+            ])
 
-        report = response.choices[0].message.content
+        report = "\n".join(report_parts)
 
         if not report:
             raise RuntimeError(
